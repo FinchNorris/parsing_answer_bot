@@ -3,4 +3,7 @@ __pycache__/
 
 # Project specific - агент
 mock_and_tests/
-apartments.db
+encrypt_config.py 
+config.py 
+parse_all.py
+config.py

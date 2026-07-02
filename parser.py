@@ -10,6 +10,8 @@
   from parser import run, ParseResult
   result = run("https://dogma.ru/projects/yukki", db="apts.db", delay=4)
   print(result.total_saved, result.blocked_pages)
+
+  https://dogma.ru/projects/park-pobedy, https://dogma.ru/projects/samolet, https://dogma.ru/projects/reeds, https://dogma.ru/projects/publicist - False
 """
 
 import os
