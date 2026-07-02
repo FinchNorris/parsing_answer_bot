@@ -34,6 +34,9 @@ try:
 except ImportError:
     API_KEY = ""
 
+# Приоритет: переменная окружения (устанавливается bot_crypt.py при расшифровке)
+API_KEY = os.environ.get("FIRECRAWL_KEY") or API_KEY
+
 # Сервер может использовать системный прокси — исключаем Firecrawl из него,
 # чтобы запросы к api.firecrawl.dev шли напрямую
 _FIRECRAWL_HOST = "api.firecrawl.dev"
