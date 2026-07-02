@@ -70,9 +70,6 @@ MAIN_KB = ReplyKeyboardMarkup([
     ["🔄 Обновить данные",  "📍 Список ЖК"],
 ], resize_keyboard=True)
 
-STOP_KB = ReplyKeyboardMarkup([
-    ["⛔ Остановить парсинг"],
-], resize_keyboard=True)
 
 CITIES_KB = ReplyKeyboardMarkup(
     [[city] for city in CITIES.keys()] + [["← Назад"]],
@@ -254,33 +251,23 @@ async def start_parsing(update: Update, context: ContextTypes.DEFAULT_TYPE,
     chat_id = update.effective_chat.id
     bot = context.bot
 
-    stop_event = threading.Event()
-    context.user_data["stop_event"] = stop_event
-    context.user_data["parsing"] = True
-
     await bot.send_message(
         chat_id,
-        f"🚀 Запускаю парсинг: *{label}*\n"
-        f"Парсим до 5 страниц. Квартиры будут появляться по мере загрузки.",
+        f"🚀 Запускаю парсинг: *{label}*\nПарсим до 5 страниц. Квартиры будут появляться по мере загрузки.",
         parse_mode="Markdown",
-        reply_markup=STOP_KB,
+        reply_markup=MAIN_KB,
     )
 
     for url in urls:
-        if stop_event.is_set():
-            break
         await bot.send_message(chat_id, f"📡 Парсим: `{url}`", parse_mode="Markdown")
-        await run_parser_to_chat(url, chat_id, bot, stop_event=stop_event)
+        await run_parser_to_chat(url, chat_id, bot, stop_event=None)
 
-    context.user_data["parsing"] = False
-    context.user_data.pop("stop_event", None)
-
-    if stop_event.is_set():
-        msg = f"⛔ *Парсинг остановлен.*"
-    else:
-        msg = f"✅ *Готово: {label}*\nМожете задавать вопросы по квартирам!"
-
-    await bot.send_message(chat_id, msg, parse_mode="Markdown", reply_markup=MAIN_KB)
+    await bot.send_message(
+        chat_id,
+        f"✅ *Готово: {label}*\nМожете задавать вопросы по квартирам!",
+        parse_mode="Markdown",
+        reply_markup=MAIN_KB,
+    )
 
 
 # ── Главный обработчик сообщений ──────────────────────────────────────────────
@@ -288,24 +275,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text  = update.message.text.strip()
     uid   = update.effective_user.id
     state = context.user_data.get("state", "main")
-
-    # Кнопка остановки парсинга
-    if text == "⛔ Остановить парсинг":
-        stop_event = context.user_data.get("stop_event")
-        if stop_event:
-            stop_event.set()
-            await update.message.reply_text("⛔ Останавливаю парсинг...", reply_markup=MAIN_KB)
-        else:
-            await update.message.reply_text("Парсинг не запущен.", reply_markup=MAIN_KB)
-        return
-
-    # Если идёт парсинг — игнорируем другие сообщения
-    if context.user_data.get("parsing"):
-        await update.message.reply_text(
-            "⏳ Идёт парсинг. Нажмите «⛔ Остановить парсинг» чтобы прервать.",
-            reply_markup=STOP_KB,
-        )
-        return
 
     # Быстрые кнопки
     if text == "📋 Саммари диалога":
