@@ -1,0 +1,6 @@
+# Python
+__pycache__/
+
+# Project specific - агент
+mock_and_tests/
+apartments.db
