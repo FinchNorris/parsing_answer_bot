@@ -66,7 +66,6 @@ if _pre_args.key:
     FIRECRAWL_KEY = _secrets["FIRECRAWL_KEY"]
     DB_PATH       = _secrets["DB_PATH"]
     PROXY_URL     = _secrets["PROXY_URL"]
-    os.environ["FIRECRAWL_KEY"] = FIRECRAWL_KEY
 else:
     # Fallback: открытый config.py если --key не передан
     try:
@@ -177,6 +176,7 @@ async def run_parser_to_chat(url: str, chat_id: int, bot, stop_event, db_path: s
                 log_callback=log_callback,
                 on_apartment=on_apartment,
                 stop_event=stop_event,
+                api_key=FIRECRAWL_KEY,
             )
         except Exception as e:
             log_queue.put(("LOG", "ERR", f"Критическая ошибка: {e}"))
