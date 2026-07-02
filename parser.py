@@ -45,6 +45,12 @@ try:
     if getattr(_cfg, "DISABLE_SYSTEM_PROXY_FOR_FIRECRAWL", False):
         for _var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
             os.environ.pop(_var, None)
+    _firecrawl_proxy = getattr(_cfg, "FIRECRAWL_PROXY", "")
+    if _firecrawl_proxy:
+        os.environ["HTTP_PROXY"]  = _firecrawl_proxy
+        os.environ["HTTPS_PROXY"] = _firecrawl_proxy
+        os.environ["http_proxy"]  = _firecrawl_proxy
+        os.environ["https_proxy"] = _firecrawl_proxy
 except ImportError:
     pass
 
@@ -216,7 +222,7 @@ def scrape_page(app: FirecrawlApp, base_url: str, page_num: int) -> Optional[str
 
 
 # ── Обработка одной страницы ──────────────────────────────────────────────────
-def process_page(app, conn, base_url, page_num, total_pages, жк, delay_on_block=0, _log=None) -> Optional[int]:
+def process_page(app, conn, base_url, page_num, total_pages, жк, delay_on_block=0, _log=None, on_apartment=None) -> Optional[int]:
     """
     Возвращает кол-во сохранённых квартир или None если страница заблокирована/пустая.
     delay_on_block — доп. пауза перед запросом (для ретраев).
@@ -251,19 +257,25 @@ def process_page(app, conn, base_url, page_num, total_pages, жк, delay_on_bloc
     for o in objects:
         print_apt(o)
 
+    if on_apartment and objects:
+        try:
+            on_apartment(objects)
+        except Exception:
+            pass
+
     return saved
 
 
 # ── Основная функция (используется и как CLI, и как модуль) ───────────────────
 def run(
-    start_url: str,
-    db:          str   = "apartments.db",
-    delay:       float = 3.0,
-    max_pages:   int   = 0,
-    retry_delay: float = 10.0,
-    max_retries: int   = 3,
-    log_callback = None,   # callable(level: str, msg: str) — вызывается на каждый лог
-    api_key: str = "",     # Firecrawl API key (если не задан — берётся из config.py)
+    start_url:    str   = "",
+    db:           str   = "apartments.db",
+    delay:        float = 3.0,
+    max_pages:    int   = 5,
+    log_callback  = None,   # callable(level, msg) — лог в Telegram
+    on_apartment  = None,   # callable(list[dict]) — батч квартир со страницы
+    stop_event    = None,   # threading.Event — установи для остановки парсинга
+    api_key: str  = "",
 ) -> ParseResult:
     """
     Парсит квартиры с указанного URL и сохраняет в SQLite.
@@ -301,6 +313,11 @@ def run(
 
     # ── Основной проход ───────────────────────────────────────────────────────
     while True:
+        # Проверяем сигнал остановки
+        if stop_event and stop_event.is_set():
+            _log("Парсинг остановлен пользователем", "WARN")
+            break
+
         _log(f"Страница {current}{f'/{total_pages}' if total_pages else '/?'}")
 
         if current == 1:
@@ -327,7 +344,7 @@ def run(
             result.total_pages = total_pages
 
             _log(f"ЖК: {жк}", "OK")
-            _log(f"Квартир: {total_count} | страниц: {total_pages} | по {limit} на стр.", "OK")
+            _log(f"Квартир на сайте: {total_count} | парсим страниц: {total_pages}", "OK")
 
             objects = gff.get("objects", [])
             saved = save_apartments(conn, objects, жк)
@@ -336,12 +353,19 @@ def run(
             _log(f"Стр.1: {saved} кв. сохранено | всего: {result.total_saved}", "DATA")
             for o in objects:
                 print_apt(o)
+            if on_apartment and objects:
+                try:
+                    on_apartment(objects)
+                except Exception:
+                    pass
 
         else:
-            saved = process_page(app, conn, start_url, current, total_pages, жк, _log=_log)
+            saved = process_page(
+                app, conn, start_url, current, total_pages, жк,
+                _log=_log, on_apartment=on_apartment,
+            )
             if saved is None:
                 result.blocked_pages.append(current)
-                time.sleep(delay * 2)
             else:
                 result.total_saved += saved
 
@@ -350,45 +374,16 @@ def run(
 
         current += 1
         if current <= total_pages:
-            _log(f"Пауза {delay}с...")
-            time.sleep(delay)
-
-    # ── Ретрай заблокированных страниц ───────────────────────────────────────
-    if result.blocked_pages:
-        _log(f"Заблокировано страниц: {len(result.blocked_pages)} → {result.blocked_pages}", "WARN")
-        _log(f"Запускаю повторные попытки (макс. {max_retries}, пауза {retry_delay}с)...")
-
-        for attempt in range(1, max_retries + 1):
-            still_blocked = []
-            _log(f"Попытка {attempt}/{max_retries} для стр.: {result.blocked_pages}")
-
-            for page_num in result.blocked_pages:
-                _log(f"Ретрай стр.{page_num} (попытка {attempt})...")
-                saved = process_page(
-                    app, conn, start_url, page_num, total_pages, жк,
-                    delay_on_block=retry_delay, _log=_log,
-                )
-                if saved is None:
-                    still_blocked.append(page_num)
-                else:
-                    result.total_saved += saved
-                    result.retried_pages.append(page_num)
-                    _log(f"Стр.{page_num} успешно повторена", "OK")
-
-            result.blocked_pages = still_blocked
-            if not result.blocked_pages:
-                _log("Все заблокированные страницы успешно повторены", "OK")
-                break
-            if attempt < max_retries:
-                _log(f"Ещё заблокировано: {still_blocked}. Следующая попытка через {retry_delay}с...")
-
-        if result.blocked_pages:
-            _log(f"Не удалось получить страницы после {max_retries} попыток: {result.blocked_pages}", "ERR")
+            # Пауза с проверкой stop_event каждую секунду
+            for _ in range(int(delay)):
+                if stop_event and stop_event.is_set():
+                    break
+                time.sleep(1)
 
     # ── Итог ──────────────────────────────────────────────────────────────────
-    _log(f"Готово. Квартир в БД: {result.total_saved}", "OK")
     if result.blocked_pages:
-        log(f"Пропущено страниц (DDoS): {result.blocked_pages}", "WARN")
+        _log(f"Пропущено страниц (DDoS): {result.blocked_pages}", "WARN")
+    _log(f"Готово. Квартир в БД: {result.total_saved}", "OK")
 
     rows = conn.execute("""
         SELECT тип, COUNT(*) cnt, MIN(цена), MAX(цена), ROUND(AVG(площадь), 1)
@@ -408,19 +403,10 @@ def run(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     cli = argparse.ArgumentParser(description="Парсер квартир dogma.ru через Firecrawl")
-    cli.add_argument("url",                                help="URL страницы проекта")
-    cli.add_argument("--db",          default="apartments.db", help="SQLite файл (default: apartments.db)")
-    cli.add_argument("--delay",       type=float, default=3.0, help="Задержка между страницами, сек (default: 3)")
-    cli.add_argument("--pages",       type=int,   default=0,   help="Макс. страниц, 0 = все (default: 0)")
-    cli.add_argument("--retry-delay", type=float, default=10.0,help="Задержка перед ретраем, сек (default: 10)")
-    cli.add_argument("--max-retries", type=int,   default=3,   help="Попыток для заблокированных страниц (default: 3)")
+    cli.add_argument("url",                               help="URL страницы проекта")
+    cli.add_argument("--db",    default="apartments.db",  help="SQLite файл (default: apartments.db)")
+    cli.add_argument("--delay", type=float, default=3.0,  help="Задержка между страницами, сек (default: 3)")
+    cli.add_argument("--pages", type=int,   default=5,    help="Макс. страниц (default: 5)")
     args = cli.parse_args()
 
-    run(
-        start_url   = args.url,
-        db          = args.db,
-        delay       = args.delay,
-        max_pages   = args.pages,
-        retry_delay = args.retry_delay,
-        max_retries = args.max_retries,
-    )
+    run(start_url=args.url, db=args.db, delay=args.delay, max_pages=args.pages)

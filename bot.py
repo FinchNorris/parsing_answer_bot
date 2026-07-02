@@ -8,6 +8,7 @@ import asyncio
 import logging
 import threading
 from queue import Queue, Empty
+from typing import Optional
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -65,10 +66,12 @@ LEVEL_ICON = {"OK": "✅", "ERR": "❌", "WARN": "⚠️", "DATA": "📦", "INFO
 
 # ── Клавиатуры ────────────────────────────────────────────────────────────────
 MAIN_KB = ReplyKeyboardMarkup([
-    ["🔍 Найти студию до 6 млн",  "🔍 Найти 1-комн. от 35 м²"],
-    ["📊 Самые дешёвые квартиры", "📊 Самые большие квартиры"],
-    ["📋 Саммари диалога",         "🔄 Начать заново"],
-    ["🔄 Обновить данные"],
+    ["📋 Саммари диалога",  "🔄 Начать заново"],
+    ["🔄 Обновить данные",  "📍 Список ЖК"],
+], resize_keyboard=True)
+
+STOP_KB = ReplyKeyboardMarkup([
+    ["⛔ Остановить парсинг"],
 ], resize_keyboard=True)
 
 CITIES_KB = ReplyKeyboardMarkup(
@@ -90,34 +93,63 @@ def get_agent(user_id: int) -> ApartmentAgent:
     return agents[user_id]
 
 
-# ── Парсинг с трансляцией логов в чат ────────────────────────────────────────
-async def run_parser_to_chat(url: str, chat_id: int, bot, db_path: str = ""):
+# ── Форматирование одной квартиры для вывода в чат ───────────────────────────
+def format_apartment(o: dict) -> str:
+    rooms = o.get("room", 0)
+    тип = "Студия" if rooms == 0 else f"{rooms}-комн."
+    цена = f"{o.get('cost', 0):,}".replace(",", " ")
+    скидка = o.get("cost_sale")
+    цена_str = f"{цена} ₽"
+    if скидка and скидка > 0:
+        цена_str += f" (скидка с {скидка:,} ₽)".replace(",", " ")
+    return (
+        f"🏠 {тип} | {o.get('area', '?')} м² | {цена_str}\n"
+        f"Этаж {o.get('floor', '?')} | Корп. {o.get('letter_name', '?')} | "
+        f"Сдача {(o.get('rv_pd_deadline') or '')[:7]}\n"
+        f"🔗 https://dogma.ru/flat/{o.get('id', '')}"
+    )
+
+
+# ── Парсинг с трансляцией логов и квартир в чат ───────────────────────────────
+async def run_parser_to_chat(url: str, chat_id: int, bot, stop_event, db_path: str = ""):
     """
-    Запускает parser.run() в потоке, логи батчами шлёт в Telegram.
+    Запускает parser.run() в потоке (макс. 5 страниц).
+    Логи батчами шлёт в чат, найденные квартиры — отдельными сообщениями.
     """
     db = db_path or DB_PATH
     log_queue: Queue = Queue()
 
     def log_callback(level: str, msg: str):
-        log_queue.put((level, msg))
+        log_queue.put(("LOG", level, msg))
+
+    def on_apartment(objects: list):
+        log_queue.put(("APTS", objects))
+
+    _saved_env = {k: os.environ.get(k) for k in
+                  ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
 
     def parser_thread():
         try:
-            dogma_parser.run(start_url=url, db=db, delay=3.0, log_callback=log_callback)
+            dogma_parser.run(
+                start_url=url, db=db, delay=3.0, max_pages=5,
+                log_callback=log_callback,
+                on_apartment=on_apartment,
+                stop_event=stop_event,
+            )
         except Exception as e:
-            log_queue.put(("ERR", f"Критическая ошибка: {e}"))
+            log_queue.put(("LOG", "ERR", f"Критическая ошибка: {e}"))
         finally:
             log_queue.put(None)  # sentinel
 
     threading.Thread(target=parser_thread, daemon=True).start()
 
-    buffer = []
+    log_buffer = []
 
-    async def flush():
-        if not buffer:
+    async def flush_logs():
+        if not log_buffer:
             return
-        text = "\n".join(buffer)
-        buffer.clear()
+        text = "\n".join(log_buffer)
+        log_buffer.clear()
         try:
             await bot.send_message(chat_id, f"```\n{text}\n```", parse_mode="Markdown")
         except Exception:
@@ -134,18 +166,30 @@ async def run_parser_to_chat(url: str, chat_id: int, bot, db_path: str = ""):
                 await asyncio.sleep(0.3)
                 continue
 
-            if item is None:        # парсинг завершён
-                await flush()
+            if item is None:    # парсинг завершён
+                await flush_logs()
+                for k, v in _saved_env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
                 return
 
-            level, msg = item
-            icon = LEVEL_ICON.get(level, "ℹ️")
-            buffer.append(f"{icon} {msg}")
+            if item[0] == "APTS":
+                await flush_logs()
+                cards = "\n\n".join(format_apartment(o) for o in item[1])
+                try:
+                    await bot.send_message(chat_id, cards, disable_web_page_preview=True)
+                except Exception:
+                    pass
+            else:
+                _, level, msg = item
+                icon = LEVEL_ICON.get(level, "ℹ️")
+                log_buffer.append(f"{icon} {msg}")
+                if len(log_buffer) >= 6:
+                    await flush_logs()
 
-            if len(buffer) >= 6:
-                await flush()
-
-        await flush()
+        await flush_logs()
 
 
 # ── Команды ───────────────────────────────────────────────────────────────────
@@ -185,29 +229,58 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Диалог сброшен. Что ищете?", reply_markup=MAIN_KB)
 
 
+# ── Список ЖК ────────────────────────────────────────────────────────────────
+def build_jk_list() -> str:
+    city_map = {
+        "Ленинградская обл.": ["Догма Юкки"],
+        "Новороссийск":       ["Порто-Ново"],
+        "Реутов":             ["ЭВО"],
+        "Пушкино":            ["Публицист"],
+        "Калуга":             ["Космопарк"],
+        "Омск":               ["Снегири"],
+        "Краснодар":          list(KRASNODAR_PROJECTS.keys()),
+    }
+    lines = ["📍 *Доступные ЖК:*\n"]
+    for city, projects in city_map.items():
+        lines.append(f"🏙 *{city}:*")
+        for p in projects:
+            lines.append(f"  • {p}")
+    return "\n".join(lines)
+
+
 # ── Запуск парсинга ───────────────────────────────────────────────────────────
 async def start_parsing(update: Update, context: ContextTypes.DEFAULT_TYPE,
                         urls: list, label: str):
     chat_id = update.effective_chat.id
     bot = context.bot
 
+    stop_event = threading.Event()
+    context.user_data["stop_event"] = stop_event
+    context.user_data["parsing"] = True
+
     await bot.send_message(
         chat_id,
-        f"🚀 Запускаю парсинг: *{label}*\nЛоги будут появляться по мере работы...",
+        f"🚀 Запускаю парсинг: *{label}*\n"
+        f"Парсим до 5 страниц. Квартиры будут появляться по мере загрузки.",
         parse_mode="Markdown",
-        reply_markup=MAIN_KB,
+        reply_markup=STOP_KB,
     )
 
     for url in urls:
+        if stop_event.is_set():
+            break
         await bot.send_message(chat_id, f"📡 Парсим: `{url}`", parse_mode="Markdown")
-        await run_parser_to_chat(url, chat_id, bot)
+        await run_parser_to_chat(url, chat_id, bot, stop_event=stop_event)
 
-    await bot.send_message(
-        chat_id,
-        f"✅ *Данные обновлены: {label}*\nМожете задавать вопросы по квартирам!",
-        parse_mode="Markdown",
-        reply_markup=MAIN_KB,
-    )
+    context.user_data["parsing"] = False
+    context.user_data.pop("stop_event", None)
+
+    if stop_event.is_set():
+        msg = f"⛔ *Парсинг остановлен.*"
+    else:
+        msg = f"✅ *Готово: {label}*\nМожете задавать вопросы по квартирам!"
+
+    await bot.send_message(chat_id, msg, parse_mode="Markdown", reply_markup=MAIN_KB)
 
 
 # ── Главный обработчик сообщений ──────────────────────────────────────────────
@@ -216,12 +289,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid   = update.effective_user.id
     state = context.user_data.get("state", "main")
 
+    # Кнопка остановки парсинга
+    if text == "⛔ Остановить парсинг":
+        stop_event = context.user_data.get("stop_event")
+        if stop_event:
+            stop_event.set()
+            await update.message.reply_text("⛔ Останавливаю парсинг...", reply_markup=MAIN_KB)
+        else:
+            await update.message.reply_text("Парсинг не запущен.", reply_markup=MAIN_KB)
+        return
+
+    # Если идёт парсинг — игнорируем другие сообщения
+    if context.user_data.get("parsing"):
+        await update.message.reply_text(
+            "⏳ Идёт парсинг. Нажмите «⛔ Остановить парсинг» чтобы прервать.",
+            reply_markup=STOP_KB,
+        )
+        return
+
     # Быстрые кнопки
     if text == "📋 Саммари диалога":
         await cmd_summary(update, context); return
 
     if text == "🔄 Начать заново":
         await cmd_reset(update, context); return
+
+    if text == "📍 Список ЖК":
+        await update.message.reply_text(build_jk_list(), parse_mode="Markdown", reply_markup=MAIN_KB)
+        return
 
     if text == "🔄 Обновить данные":
         context.user_data["state"] = "choose_city"
