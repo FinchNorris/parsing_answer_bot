@@ -46,7 +46,7 @@ dogma-parser/
 ├── parser.py          # Парсер квартир с dogma.ru
 ├── agent.py           # LangChain-агент для поиска
 ├── bot.py             # Telegram-бот
-├── config.py          # Ключи и настройки (не коммитить!)
+├── config.py          # Ключи и настройки
 ├── requirements.txt   # Зависимости
 ├── apartments.db      # SQLite БД (генерируется парсером)
 └── prompts/
@@ -70,36 +70,6 @@ dogma-parser/
 ```bash
 pip install -r requirements.txt
 ```
-
-### Конфигурация
-
-Скопируй и заполни `config.py`:
-
-```python
-# Telegram
-TG_TOKEN = "ваш_токен_бота"
-
-# Anthropic (Claude)
-ANTHROPIC_KEY = "sk-ant-..."
-
-# Firecrawl
-FIRECRAWL_KEY = "fc-..."
-
-# База данных
-DB_PATH = "apartments.db"
-
-# Прокси для Telegram API (если api.telegram.org недоступен напрямую)
-# Форматы: "socks5://host:port", "http://user:pass@host:port"
-PROXY_URL = ""
-
-# Прокси для Firecrawl (если api.firecrawl.dev недоступен с сервера)
-FIRECRAWL_PROXY = ""
-
-# Сбросить системный прокси для Firecrawl (True если системный прокси мешает)
-DISABLE_SYSTEM_PROXY_FOR_FIRECRAWL = False
-```
-
-> **Важно:** добавь `config.py` и `apartments.db` в `.gitignore`
 
 ---
 
