@@ -7,7 +7,7 @@ TG_TOKEN  = "8235227377:AAH15zuO5AxMAbmeMveSWLuyMVleCdWbixk"
 ANTHROPIC_KEY = "sk-uzUMo0aRDip7x0zzfvrFbuhnRq4M3cdY"
 
 # Firecrawl
-FIRECRAWL_KEY = "fc-cee6019694b0425a9902a831c08ca32f"
+FIRECRAWL_KEY = "fc-ce662939fc9a466e9f770ae9161e5d8e"
 
 # База данных
 DB_PATH = "apartments.db"
