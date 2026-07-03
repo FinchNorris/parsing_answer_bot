@@ -241,12 +241,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del agents[user.id]
     context.user_data.clear()
     await update.message.reply_text(
-        f"Привет, {user.first_name}! 👋\n\n"
-        "Я помогу подобрать квартиру от застройщика ДОГМА.\n\n"
+        f"Здравствуйте, {user.first_name}! 👋\n\n"
+        "Я помогу Вам подобрать квартиру от застройщика ДОГМА.\n\n"
         "Примеры запросов:\n"
-        "• _Найди студию до 6 млн от 25 м²_\n"
+        "• _Найдите студию до 6 млн от 25 м²_\n"
         "• _Хочу 1-комн. на высоком этаже в Юкках_\n"
-        "• _Самые дешёвые квартиры_\n\n"
+        "• _Самые дешёвые квартиры в Краснодаре_\n\n"
         "Кнопка «🔄 Обновить данные» — спарсить свежие данные с сайта.",
         parse_mode="Markdown",
         reply_markup=MAIN_KB,
@@ -268,7 +268,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid in agents:
         del agents[uid]
     context.user_data.clear()
-    await update.message.reply_text("🔄 Диалог сброшен. Что ищете?", reply_markup=MAIN_KB)
+    await update.message.reply_text("🔄 Диалог сброшен. Что Вы ищете?", reply_markup=MAIN_KB)
 
 
 # ── Список ЖК ────────────────────────────────────────────────────────────────
@@ -381,7 +381,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = agent.process(text)
     except Exception as e:
         logger.error(f"Ошибка агента uid={uid}: {e}", exc_info=True)
-        response = "Произошла ошибка. Попробуйте ещё раз."
+        response = "Произошла ошибка. Пожалуйста, попробуйте ещё раз."
 
     for chunk in [response[i:i+4096] for i in range(0, len(response), 4096)]:
         await update.message.reply_text(chunk, reply_markup=MAIN_KB)

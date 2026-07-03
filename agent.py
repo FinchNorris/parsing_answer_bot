@@ -14,6 +14,34 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 ANTHROPIC_API_KEY = "your-anthropic-api-key"  # заменить или передать при инициализации
 DB_PATH = "apartments.db"
 
+# Маппинг ЖК → город (ключи — подстроки из названий ЖК, строчные)
+_JK_CITY: list[tuple[str, str]] = [
+    ("юкки",        "Ленинградская обл."),
+    ("порто",       "Новороссийск"),
+    ("эво",         "Реутов"),
+    ("публицист",   "Пушкино"),
+    ("космопарк",   "Калуга"),
+    ("снегири",     "Омск"),
+    ("грейд",       "Краснодар"),
+    ("ридз",        "Краснодар"),
+    ("рекорд",      "Краснодар"),
+    ("самолёт",     "Краснодар"),
+    ("samolet",     "Краснодар"),
+    ("парк победы", "Краснодар"),
+    ("догма парк",  "Краснодар"),
+    ("dогма парк",  "Краснодар"),
+    ("dogma парк",  "Краснодар"),
+]
+
+
+def get_city(jk_name: str) -> str:
+    """Возвращает город по названию ЖК."""
+    name_lower = (jk_name or "").lower()
+    for keyword, city in _JK_CITY:
+        if keyword in name_lower:
+            return city
+    return ""
+
 
 def load_prompt(filename: str) -> str:
     with open(f"prompts/{filename}", "r", encoding="utf-8") as f:
@@ -160,7 +188,7 @@ class ApartmentAgent:
         if len(self.history) > self.MAX_HISTORY:
             self.history = self.history[-self.MAX_HISTORY:]
 
-    def _history_text(self, last_n: int = 6) -> str:
+    def _history_text(self, last_n: int = 10) -> str:
         if not self.history:
             return ""
         recent = self.history[-last_n:]
@@ -212,11 +240,18 @@ class ApartmentAgent:
 
     # ── Шаг 3: формирование ответа ────────────────────────────────────────────
     def format_results(self, query: str, filters: dict, apartments: list[dict]) -> str:
+        # Обогащаем каждую квартиру полем "город"
+        enriched = []
+        for apt in apartments:
+            apt = dict(apt)
+            apt["город"] = get_city(apt.get("жк", ""))
+            enriched.append(apt)
+
         payload = {
             "запрос_пользователя": query,
             "фильтры": filters,
-            "найдено": len(apartments),
-            "квартиры": apartments,
+            "найдено": len(enriched),
+            "квартиры": enriched,
         }
 
         messages = [
@@ -231,11 +266,23 @@ class ApartmentAgent:
     def chat_response(self, query: str) -> str:
         history_text = self._history_text()
 
+        city_info = (
+            "Ленинградская обл.: Догма Юкки; "
+            "Новороссийск: Порто-Ново; "
+            "Реутов: ЭВО; "
+            "Пушкино: Публицист; "
+            "Калуга: Космопарк; "
+            "Омск: Снегири; "
+            "Краснодар: Грейд, Ридз, Рекорд 2, САМОЛЁТ 7, МКР Самолёт, ДОГМА ПАРК, Парк Победы."
+        )
+
         stats_ctx = (
             f"Ты — ассистент по подбору квартир застройщика ДОГМА. "
-            f"В базе {self.stats['total']} квартир в ЖК: {', '.join(self.stats['жк'])}. "
-            f"Помогай пользователю найти подходящую квартиру. "
-            f"Если пользователь хочет искать — попроси уточнить параметры (тип, бюджет, площадь)."
+            f"Общайся с пользователем уважительно, на «Вы». "
+            f"В базе {self.stats['total']} квартир. "
+            f"Города и ЖК: {city_info} "
+            f"Помогайте пользователю найти подходящую квартиру. "
+            f"Если пользователь хочет искать — уточните параметры (тип, бюджет, площадь, город)."
         )
 
         messages = [
@@ -263,7 +310,7 @@ class ApartmentAgent:
 
             if not apartments:
                 response = (
-                    "По вашему запросу ничего не найдено. "
+                    "По Вашему запросу ничего не найдено. "
                     "Попробуйте расширить фильтры — увеличить бюджет, уменьшить площадь "
                     "или убрать ограничение по ЖК."
                 )
